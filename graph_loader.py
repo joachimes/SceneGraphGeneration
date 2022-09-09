@@ -4,16 +4,17 @@ import copy
 import os.path as osp
 
 import torch
-import numpy as np
+from numpy import loadtxt as np_loadtext
 from tqdm import tqdm
 from pytorch_lightning import LightningDataModule
 from torch_geometric.data import InMemoryDataset, Data, LightningDataset
+from sklearn.model_selection import train_test_split
 
 
-class graph_dataset(InMemoryDataset):
+class GraphDataset(InMemoryDataset):
     scene = 'office'
     def __init__(self, root, transform=None, pre_transform=None):
-        super(graph_dataset, self).__init__(root, transform, pre_transform)
+        super(GraphDataset, self).__init__(root, transform, pre_transform)
         self.data, self.slices = torch.load(self.processed_paths[0])
 
 
@@ -35,82 +36,25 @@ class graph_dataset(InMemoryDataset):
         with open(osp.join(self.raw_dir[:-4], self.scene + '_data.json')) as f:
             self.valid_rooms = json.load(f)
         
-
-        id2type = np.loadtxt(osp.join('data','SUNCG_id2type.csv'), dtype=str, delimiter=',')
-        dict_id2type = {}
-        for line in id2type:
-            dict_id2type[line[1]] = line[3]
-
-        
-        with open(osp.join('data', f'TRAIN_id2cat_{self.scene}.json'), 'r') as f:
-            id2cat = json.load(f)
-
-
-        cat2id = {id2cat[id]: id for id in id2cat.keys()}
-
         data_list = []
         for room in tqdm(self.valid_rooms):
-            # loop for rooms
             node_list = self.__preprocess_root_wall_nodes__(room['node_list'])
 
-
             # Node features - {'co-occurrence':'un', 'support': 'dir', 'surround': 'dir'}
-            attrs = []
-            edges = []
-
-            for _, node in node_list.items():
-                # Grab edge connections 
-                for neighbor in node['co-occurrence'] + node['support']: # + node['surround']:
-                    to_node = node['self_info']['node_model_id'].split('_')[-1]
-                    from_node = node_list[neighbor]['self_info']['node_model_id'].split('_')[-1]
-                    edges.append([int(to_node), int(from_node)])
-
-
-
-                # Grab node features
-                if (node['type'] == 'root'):
-                    cat = 'wall'
-                    dim_vec = [0.0] * 3
-                    pos_vec = [0.0] * 3
-                elif (node['type'] == 'wall'):
-                    cat = 'wall'
-                    dim_vec = node['self_info']['dim']
-                    pos_vec = node['self_info']['translation']
-                else:
-                    cat = dict_id2type[node['self_info']['node_model_id']]
-                    dim_vec = node['self_info']['dim']
-                    pos_vec = node['self_info']['translation']
-
-                cat_vec = [0.0] * (len(cat2id.keys()) + 1)
-                cat_vec[int(cat2id[cat])] = 1.0
-
-                attrs.append(cat_vec + dim_vec + pos_vec)
+            edges, attrs = self.__extract_edge_and_attr__(node_list)
 
             x = torch.tensor(attrs, dtype=torch.float)
 
-
-            # Edge info
             # Normalize the edges indices
-            # TODO: normalize model ids?
-            edge_idx = torch.tensor(np.array(edges).transpose(), dtype=torch.long)
-            map_dict = {v.item():i for i,v in enumerate(torch.unique(edge_idx))}
-            map_edge = torch.zeros_like(edge_idx)
-            for k,v in map_dict.items():
-                map_edge[edge_idx==k] = v
-            edge_index = torch.tensor(map_edge, dtype=torch.long)
-
+            # TODO: should edges_ids be normalized?
+            edge_index = self.__normalize_edge_ids__(edges)
             graph = Data(x=x, edge_index=edge_index)
             data_list.append(graph)
+
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
     
-    def to_torch(n, torch_type=torch.FloatTensor, requires_grad=False, dim_0=1):
-        n = torch.tensor(n, requires_grad=requires_grad).type(torch_type)
-        n = n.view(dim_0, -1)
-        return n    
-        
-    ''' useful functions '''
- 
+    ''' Helper functions '''
     def __preprocess_root_wall_nodes__(self, node_list):
         """
         # simple preprocess for root and wall nodes
@@ -144,27 +88,86 @@ class graph_dataset(InMemoryDataset):
 
         return node_list
 
+    def __extract_edge_and_attr__(self, node_list):
+        """
+        # extract edge and node attributes
+        :param node_list:
+        :return:
+        """
+        id2type = np_loadtext(osp.join('data','SUNCG_id2type.csv'), dtype=str, delimiter=',')
+        dict_id2type = {}
+        for line in id2type:
+            dict_id2type[line[1]] = line[3]
 
-
-class Load_Graph(LightningDataModule):
-    def __init__(self, root):
-        super(Load_Graph, self).__init__()
-        self.graph_paths = glob.glob(osp.join(root, '*_data.json'))[0]
-        self.num_workers = 1
-        self.dataset = graph_dataset
-
-        self.train_dataset = self.dataset(self.graph_paths, split='train')
-        self.val_dataset = self.dataset(self.graph_paths, split='val')
-        self.test_dataset = self.dataset(self.graph_paths, split='test')
         
-        # self.train_dataset, self.val_dataset, self.test_dataset = self.dataset(self.graph_paths)
+        with open(osp.join('data', f'TRAIN_id2cat_{self.scene}.json'), 'r') as f:
+            id2cat = json.load(f)
 
+
+        cat2id = {id2cat[id]: id for id in id2cat.keys()}
+
+        edges = []
+        attrs = []
+
+        for _, node in node_list.items():
+            # Grab edge connections 
+            for neighbor in node['co-occurrence'] + node['support']: # + node['surround']:
+                to_node = node['self_info']['node_model_id'].split('_')[-1]
+                from_node = node_list[neighbor]['self_info']['node_model_id'].split('_')[-1]
+                edges.append([int(to_node), int(from_node)])
+
+            # Grab node features
+            if (node['type'] == 'root'):
+                cat = 'wall'
+                dim_vec = [0.0] * 3
+                pos_vec = [0.0] * 3
+            elif (node['type'] == 'wall'):
+                cat = 'wall'
+                dim_vec = node['self_info']['dim']
+                pos_vec = node['self_info']['translation']
+            else:
+                cat = dict_id2type[node['self_info']['node_model_id']]
+                dim_vec = node['self_info']['dim']
+                pos_vec = node['self_info']['translation']
+
+            cat_vec = [0.0] * (len(cat2id.keys()) + 1)
+            cat_vec[int(cat2id[cat])] = 1.0
+
+            attrs.append(cat_vec + dim_vec + pos_vec)
+
+        return edges, attrs
+
+    def __normalize_edge_ids__(self, edges):
+        """
+        # normalize edge ids
+        :param edges:
+        :return:
+        """
+        edge_idx = torch.tensor(edges, dtype=torch.long).T
+        map_dict = {v.item():i for i,v in enumerate(torch.unique(edge_idx))}
+        map_edge = torch.zeros_like(edge_idx)
+        for k,v in map_dict.items():
+            map_edge[edge_idx==k] = v
+        edge_index = torch.tensor(map_edge, dtype=torch.long)
+        return edge_index
+
+
+class GraphLoader(LightningDataModule):
+    def __init__(self, root, split_val=.15, split_test=.1, num_workers=4, batch_size=32):
+        super(GraphLoader, self).__init__()
+        self.root = root
+        self.num_workers = num_workers
+        self.dataset = GraphDataset(self.root)
+
+        self.train_dataset, self.val_dataset = train_test_split(self.dataset, test_size=split_val)
+        self.train_dataset, self.test_dataset = train_test_split(self.train_dataset, test_size=split_test/(1-split_val))
 
         self.dataloader = LightningDataset(train_dataset=self.train_dataset
                                             , val_dataset=self.val_dataset
                                             , test_dataset=self.test_dataset
                                             , num_workers=self.num_workers
-                                            , pin_memory=True)
+                                            , pin_memory=True
+                                            , batch_size=batch_size)
 
     def train_dataloader(self):
         return self.dataloader.train_dataloader()
@@ -177,6 +180,14 @@ class Load_Graph(LightningDataModule):
 
 
 if __name__ == '__main__':
+    # import networkx as nx
+    # from torch_geometric.utils.convert import to_networkx
+    # import matplotlib.pyplot as plt
+
     root = './data/sgn-data-train/'
-    graph = graph_dataset(root)
+    graph = GraphLoader(root)
+    # vis = to_networkx(graph)
+    # plt.figure(1,figsize=(8,8)) 
+    # nx.draw(vis, cmap=plt.get_cmap('Set3'),node_size=70,linewidths=6)
+    # plt.show()
     
