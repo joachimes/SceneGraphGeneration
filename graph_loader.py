@@ -41,20 +41,23 @@ class GraphDataset(InMemoryDataset):
             node_list = self.__preprocess_root_wall_nodes__(room['node_list'])
 
             # Node features - {'co-occurrence':'un', 'support': 'dir', 'surround': 'dir'}
-            edges, attrs = self.__extract_edge_and_attr__(node_list)
+            edges, attrs, labels = self.__extract_edge_and_attr__(node_list)
 
             x = torch.tensor(attrs, dtype=torch.float)
 
             # Normalize the edges indices
-            # TODO: should edges_ids be normalized?
             edge_index = self.__normalize_edge_ids__(edges)
-            graph = Data(x=x, edge_index=edge_index)
+
+            # Category of the nodes
+            y = torch.tensor(labels, dtype=torch.float)
+            
+            graph = Data(x=x, edge_index=edge_index, y=y)
             data_list.append(graph)
 
         data, slices = self.collate(data_list)
         torch.save((data, slices), self.processed_paths[0])
     
-    ''' Helper functions '''
+    """ Helper functions """
     def __preprocess_root_wall_nodes__(self, node_list):
         """
         # simple preprocess for root and wall nodes
@@ -108,7 +111,7 @@ class GraphDataset(InMemoryDataset):
 
         edges = []
         attrs = []
-
+        labels = []
         for _, node in node_list.items():
             # Grab edge connections 
             for neighbor in node['co-occurrence'] + node['support']: # + node['surround']:
@@ -133,9 +136,11 @@ class GraphDataset(InMemoryDataset):
             cat_vec = [0.0] * (len(cat2id.keys()) + 1)
             cat_vec[int(cat2id[cat])] = 1.0
 
-            attrs.append(cat_vec + dim_vec + pos_vec)
+            attrs.append(dim_vec + pos_vec)
+            labels.append(cat_vec)
 
-        return edges, attrs
+        return edges, attrs, labels 
+
 
     def __normalize_edge_ids__(self, edges):
         """
@@ -153,11 +158,11 @@ class GraphDataset(InMemoryDataset):
 
 
 class GraphLoader(LightningDataModule):
-    def __init__(self, root, split_val=.15, split_test=.1, num_workers=4, batch_size=32):
+    def __init__(self, data_dir, split_val=.15, split_test=.1, num_workers=4, batch_size=32, **kwargs):
         super(GraphLoader, self).__init__()
-        self.root = root
+        self.data_dir = data_dir
         self.num_workers = num_workers
-        self.dataset = GraphDataset(self.root)
+        self.dataset = GraphDataset(self.data_dir)
 
         self.train_dataset, self.val_dataset = train_test_split(self.dataset, test_size=split_val)
         self.train_dataset, self.test_dataset = train_test_split(self.train_dataset, test_size=split_test/(1-split_val))
