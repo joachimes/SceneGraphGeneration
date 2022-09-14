@@ -8,14 +8,14 @@ from models.gat_model import GAT
 
 
 class LightningTrainer(LightningModule):
-    def __init__(self, model, node_dim, hidden_dim, out_dim, lr=1e-3, weight_decay=None, **kwargs):
+    def __init__(self, model, node_dim, hidden_dim, out_dim, lr=1e-3, weight_decay=None, k=5, **kwargs):
         super(LightningTrainer,self).__init__()
 
         assert model in [BaseGNN.__name__, GAT.__name__], 'Model not supported'
         self.model = eval(model)(node_dim, hidden_dim, out_dim)
         self.lr = lr
-        print(lr)
         self.weight_decay = weight_decay
+        self.k = k
 
 
     def configure_optimizers(self):
@@ -32,24 +32,7 @@ class LightningTrainer(LightningModule):
         loss = self.Loss(out, data.y)
         Result = {'loss':loss}
         return Result
-
-    # def training_epoch_end(self, Outputs):
-    #     Avg_Loss = torch.stack([x['loss'] for x in Outputs]).mean()
-    #     Avg_Acc = torch.stack([x['training_accuracy'] for x in Outputs]).mean()
-    #     Epoch_Log = {'avg_training_loss':Avg_Loss, 'avg_training_accuracy':Avg_Acc}
-    #     self.logger.experiment.log_metrics(Epoch_Log)
-    #     return Epoch_Log
-
-
-    # def validation_step(self, batch, batch_idx):
-    #     val_data = batch
-    #     logits = self.model.forward(val_data)
-    #     loss = self.Loss(logits,val_data.y)
-    #     acc_bool = logits == val_data.y
-    #     acc = sum(acc_bool.long()) * 100 // len(logits)
-    #     res = {'val_loss':loss, 'val_accuracy':acc.float()}
-    #     self.logger.experiment.log_metrics(res)
-    #     return res
+        
 
     def validation_step(self, batch, batch_idx):
         val_data = batch
@@ -67,12 +50,18 @@ class LightningTrainer(LightningModule):
         test_data = batch
         out = self.model.forward(test_data)
         loss = self.Loss(out, test_data.y)
-        pred = out.argmax(dim=1)
-        test_correct = pred == test_data.y.argmax(dim=1)
-        test_acc = int(test_correct.sum()) / len(test_correct)
-        res = {'test_loss':loss, 'test_acc':test_acc}
+        res = {'test_loss': loss}
+
+        # Compare topk accuracy for pred and test_data.y
+        topK_pred = torch.topk(out, k=self.k, dim=1).indices
+        max_y = test_data.y.argmax(dim=1)
+        test_correct_accum = torch.zeros_like(max_y)
+        for i in range(self.k):
+            test_correct_accum += topK_pred[:,i].flatten() == max_y
+            res[f'top_{i+1}_test_acc'] = int(test_correct_accum.sum()) / len(test_correct_accum)
         self.logger.experiment.log_metrics(res)
         return res
+
 
 if __name__ == '__main__':
     from pytorch_lightning import Trainer, seed_everything
