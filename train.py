@@ -32,7 +32,11 @@ class LightningTrainer(LightningModule):
         loss = self.Loss(out, data.y)
         Result = {'loss':loss}
         return Result
-        
+
+    def training_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        res = {'train_avg_loss': avg_loss}
+        self.logger.experiment.log_metrics(res)
 
     def validation_step(self, batch, batch_idx):
         val_data = batch
@@ -42,8 +46,15 @@ class LightningTrainer(LightningModule):
         val_correct = pred == val_data.y.argmax(dim=1)
         val_acc = int(val_correct.sum()) / len(val_correct)
         res = {'val_loss':loss, 'val_acc':val_acc}
+        # self.logger.experiment.log_metrics(res)
+        return res
+
+    def validation_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        avg_acc = torch.FloatTensor([x['val_acc'] for x in outputs]).mean()
+        res = {'val_avg_loss': avg_loss, 'val_avg_acc': avg_acc}
         self.logger.experiment.log_metrics(res)
-        self.log('val_loss', loss)
+        self.log('val_loss', avg_loss)
         return res
 
     def test_step(self, batch, batch_idx):
@@ -59,9 +70,15 @@ class LightningTrainer(LightningModule):
         for i in range(self.k):
             test_correct_accum += topK_pred[:,i].flatten() == max_y
             res[f'top_{i+1}_test_acc'] = int(test_correct_accum.sum()) / len(test_correct_accum)
-        self.logger.experiment.log_metrics(res)
         return res
 
+    def test_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['test_loss'] for x in outputs]).mean()
+        res = {'test_avg_loss': avg_loss}
+        for i in range(self.k):
+            res[f'top_{i+1}_avg_test_acc'] = torch.FloatTensor([x[f'top_{i+1}_test_acc'] for x in outputs]).mean()
+        self.logger.experiment.log_metrics(res)
+        return res
 
 if __name__ == '__main__':
     from pytorch_lightning import Trainer, seed_everything
