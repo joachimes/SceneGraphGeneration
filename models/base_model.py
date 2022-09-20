@@ -1,8 +1,7 @@
 import torch
 from torch_geometric.nn import GCNConv
-from torch.nn.functional import gelu, softmax
+from torch.nn.functional import relu, log_softmax
 from torch.nn import Linear, Dropout, BatchNorm1d
-from torch.optim import Adam
 
 
 class BaseGNN(torch.nn.Module):
@@ -24,9 +23,10 @@ class BaseGNN(torch.nn.Module):
         self.ClassHead.reset_parameters()
 
 
-    def forward(self,Data):
-        X, Edge_Index = Data.x, Data.edge_index
-        X = self.Dropout(gelu(self.Bn1(self.Conv1(X, Edge_Index))))
-        X  = self.Dropout(gelu(self.Bn2(self.Conv2(X, Edge_Index))))
-        X = softmax(self.ClassHead(X), dim=1)
-        return X
+    def forward(self,data):
+        x, edge_index = data.x, data.edge_index
+        x = self.Dropout(relu(self.Bn1(self.Conv1(x, edge_index))))
+        x  = self.Dropout(relu(self.Bn2(self.Conv2(x, edge_index))))
+        x = log_softmax(self.ClassHead(x), dim=1)
+        # x = self.ClassHead(x)
+        return x
