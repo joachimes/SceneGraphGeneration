@@ -12,10 +12,14 @@ from sklearn.model_selection import train_test_split
 
 
 class GraphDataset(InMemoryDataset):
-    scene = 'office'
-    def __init__(self, root, transform=None, pre_transform=None):
+    scenes = ['bedroom', 'bathroom', 'office', 'living']
+    def __init__(self, root, transform=None, pre_transform=None, scene=scenes[0]):
         super(GraphDataset, self).__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+        self.scene = scene
+        for path in self.processed_paths:
+            if scene in path:
+                print('Loading data from', path)
+                self.data, self.slices = torch.load(path)
 
 
     @property
@@ -25,7 +29,7 @@ class GraphDataset(InMemoryDataset):
 
     @property
     def processed_file_names(self):
-        return self.scene + '_dataset.pt'
+        return [scene + '_dataset.pt' for scene in self.scenes]
 
 
     def indices(self):
@@ -33,29 +37,30 @@ class GraphDataset(InMemoryDataset):
 
 
     def process(self):
-        with open(osp.join(self.raw_dir[:-4], self.scene + '_data.json')) as f:
-            self.valid_rooms = json.load(f)
-        
-        data_list = []
-        for room in tqdm(self.valid_rooms):
-            node_list = self.__preprocess_root_wall_nodes__(room['node_list'])
-
-            # Node features - {'co-occurrence':'un', 'support': 'dir', 'surround': 'dir'}
-            edges, attrs, labels = self.__extract_edge_and_attr__(node_list)
-
-            x = torch.tensor(attrs, dtype=torch.float)
-
-            # Normalize the edges indices
-            edge_index = self.__normalize_edge_ids__(edges)
-
-            # Category of the nodes
-            y = torch.tensor(labels, dtype=torch.float)
+        for i, scene in enumerate(self.scenes):
+            with open(osp.join(self.raw_dir[:-4], scene + '_data.json')) as f:
+                self.valid_rooms = json.load(f)
             
-            graph = Data(x=x, edge_index=edge_index, y=y)
-            data_list.append(graph)
+            data_list = []
+            for room in tqdm(self.valid_rooms):
+                node_list = self.__preprocess_root_wall_nodes__(room['node_list'])
 
-        data, slices = self.collate(data_list)
-        torch.save((data, slices), self.processed_paths[0])
+                # Node features - {'co-occurrence':'un', 'support': 'dir', 'surround': 'dir'}
+                edges, attrs, labels = self.__extract_edge_and_attr__(node_list, scene)
+
+                x = torch.tensor(attrs, dtype=torch.float)
+
+                # Normalize the edges indices
+                edge_index = self.__normalize_edge_ids__(edges)
+
+                # Category of the nodes
+                y = torch.tensor(labels, dtype=torch.float)
+                
+                graph = Data(x=x, edge_index=edge_index, y=y)
+                data_list.append(graph)
+
+            data, slices = self.collate(data_list)
+            torch.save((data, slices), self.processed_paths[i])
     
     """ Helper functions """
     def __preprocess_root_wall_nodes__(self, node_list):
@@ -91,7 +96,7 @@ class GraphDataset(InMemoryDataset):
 
         return node_list
 
-    def __extract_edge_and_attr__(self, node_list):
+    def __extract_edge_and_attr__(self, node_list, scene):
         """
         # extract edge and node attributes
         :param node_list:
@@ -103,7 +108,7 @@ class GraphDataset(InMemoryDataset):
             dict_id2type[line[1]] = line[3]
 
         
-        with open(osp.join('data', f'TRAIN_id2cat_{self.scene}.json'), 'r') as f:
+        with open(osp.join('data', f'TRAIN_id2cat_{scene}.json'), 'r') as f:
             id2cat = json.load(f)
 
 
@@ -158,12 +163,13 @@ class GraphDataset(InMemoryDataset):
 
 
 class GraphLoader(LightningDataModule):
-    def __init__(self, data_dir, split_val=.15, split_test=.1, num_workers=4, batch_size=32, **kwargs):
+    def __init__(self, data_dir, split_val=.15, split_test=.1, num_workers=4, batch_size=32, scene='bedroom', **kwargs):
         super(GraphLoader, self).__init__()
         self.data_dir = data_dir
         self.num_workers = num_workers
-        self.dataset = GraphDataset(self.data_dir)
-
+        self.dataset = GraphDataset(self.data_dir, scene=scene)
+        self.scene = self.dataset.scene
+        
         self.train_dataset, self.val_dataset = train_test_split(self.dataset, test_size=split_val)
         self.train_dataset, self.test_dataset = train_test_split(self.train_dataset, test_size=split_test/(1-split_val))
 

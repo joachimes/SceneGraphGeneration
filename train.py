@@ -5,17 +5,20 @@ from torch.nn import CrossEntropyLoss
 from pytorch_lightning import LightningModule
 from models.base_model import BaseGNN
 from models.gat_model import GAT
+from models.gcn_model import GCN
+from models.gcngat_model import GCNGAT
 
 
 class LightningTrainer(LightningModule):
     def __init__(self, model, node_dim, hidden_dim, out_dim, lr=1e-3, weight_decay=None, k=5, **kwargs):
         super(LightningTrainer,self).__init__()
 
-        assert model in [BaseGNN.__name__, GAT.__name__], 'Model not supported'
+        assert model in [BaseGNN.__name__, GAT.__name__, GCN.__name__, GCNGAT.__name__], 'Model not supported'
         self.model = eval(model)(node_dim, hidden_dim, out_dim)
         self.lr = lr
         self.weight_decay = weight_decay
         self.k = k
+        self.loss_fn = CrossEntropyLoss()
 
 
     def configure_optimizers(self):
@@ -23,7 +26,7 @@ class LightningTrainer(LightningModule):
     
 
     def Loss(self, pred, Y):
-        return CrossEntropyLoss()(pred, Y)
+        return self.loss_fn(pred, Y)
     
     
     def training_step(self, batch, batch_idx):

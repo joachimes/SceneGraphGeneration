@@ -131,4 +131,6 @@ dmypy.json
 .DS_Store
 .vscode
 data
-logs
+*logs*/
+*.txt
+sub
